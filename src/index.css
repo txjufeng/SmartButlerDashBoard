@@ -1,0 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Manrope:wght@400;600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-headline: "Manrope", sans-serif;
+
+  --color-primary: #92cfee;
+  --color-primary-container: #1a5f7a;
+  --color-on-primary-container: #9bd7f7;
+  
+  --color-surface: #131315;
+  --color-surface-container-low: #1b1b1d;
+  --color-surface-container: #1f1f21;
+  --color-surface-container-high: #2a2a2c;
+  --color-surface-container-highest: #353437;
+  
+  --color-outline: #8a9297;
+  --color-outline-variant: #40484d;
+  
+  --radius-3xl: 2rem;
+  --radius-4xl: 2.5rem;
+}
+
+@layer base {
+  body {
+    @apply bg-surface text-white font-sans antialiased;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-surface-container/70 backdrop-blur-2xl border border-white/5;
+  }
+  
+  .premium-shadow {
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+  }
+
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  @keyframes highlight-pulse {
+    0% { 
+      box-shadow: 0 0 0 0 rgba(6, 182, 212, 0); 
+      border-color: rgba(6, 182, 212, 0.2);
+    }
+    30% { 
+      box-shadow: 0 0 40px 15px rgba(6, 182, 212, 0.7); 
+      border-color: rgba(6, 182, 212, 1);
+    }
+    100% { 
+      box-shadow: 0 0 0 0 rgba(6, 182, 212, 0); 
+      border-color: rgba(6, 182, 212, 0.2);
+    }
+  }
+
+  .highlight-active {
+    animation: highlight-pulse 2.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    z-index: 40;
+  }
+}

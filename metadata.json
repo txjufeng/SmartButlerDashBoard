@@ -1,0 +1,8 @@
+{
+  "name": "〇枢AI·NexCore V0",
+  "description": "酒店数字化转型的“第二大脑”——所有核心AI能力均在酒店本地运行，不依赖公网，不传输客人隐私数据至第三方云，同时大幅降低语音交互延迟，为住客提供“零感知”的智能服务体验。",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
