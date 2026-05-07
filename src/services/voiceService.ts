@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { FunasrService } from './funasrService';
 
 let aiInstance: any = null;
 const getAI = () => {
@@ -38,7 +39,7 @@ const INFO_QUERY_DATABASE: Record<string, string> = {
   '密码': '连接名为 SmartHotel 的无线网络，免密码，跳转页面后输入房间号和姓氏即可。',
   '天气': '今天上海天气晴朗，气温 22 到 28 度，非常适合外出。',
   '时间': `现在是北京时间 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}。`,
-  '叫醒': '请说“早上7点叫醒我”，我会为您设置叫醒服务。',
+  '叫醒': '请说"早上7点叫醒我"，我会为您设置叫醒服务。',
   '充电器': '充电器和转换插头可联系客房服务借用，免押金。',
   '转换插头': '充电器和转换插头可联系客房服务借用，免押金。',
   '婴儿床': '婴儿床免费提供，加床需额外收费，请致电前台确认。',
@@ -151,7 +152,7 @@ const functionDeclarations = [
 ];
 
 export class VoiceService {
-  public recognition: any = null;
+  public funasrService = new FunasrService();
   public isListening = false;
   public isSpeaking = false;
   private lastCommand = "";
@@ -165,136 +166,10 @@ export class VoiceService {
   private audioCtx: AudioContext | null = null;
   private conversationHistory: { role: 'user' | 'model', parts: { text: string }[] }[] = [];
   private _interimText = "";
-  private _voices: SpeechSynthesisVoice[] = [];
 
   constructor() {
-    if (typeof window !== 'undefined' && ('WebkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      this.recognition = new SpeechRecognition();
-      this.recognition.continuous = true;
-      this.recognition.interimResults = true;
-      this.recognition.lang = 'zh-CN';
-
-      // Load voices early
-      this._loadVoices();
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        if (window.speechSynthesis.onvoiceschanged !== undefined) {
-          window.speechSynthesis.onvoiceschanged = () => this._loadVoices();
-        }
-      }
-
-      this.recognition.onresult = async (event: any) => {
-        let finalTranscript = '';
-        let interimTranscript = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalTranscript += event.results[i][0].transcript;
-          } else {
-            interimTranscript += event.results[i][0].transcript;
-          }
-        }
-
-        const text = (finalTranscript || interimTranscript).trim();
-        if (!text) return;
-
-        // Interrupt AI if user starts speaking
-        if (text.length > 1 && window.speechSynthesis.speaking) {
-          window.speechSynthesis.cancel();
-          console.log('[VoiceService] Interrupted AI speech because user started talking.');
-        }
-
-        // Visual feedback for users (Show interim text immediately)
-        if (interimTranscript) {
-          this._interimText = text;
-          this.onResultCallback(text);
-        }
-
-        // Robust Wake Word Detection
-        const wakeWords = ['小枢', '小述', '小书', '小梳', '你好小枢', 'hi 小枢', 'hey 小枢', '消暑', '小舒'];
-        const wakeReg = new RegExp(`(${wakeWords.join('|')})`, 'i');
-        const matchedWakeWord = text.match(wakeReg);
-
-        if (matchedWakeWord) {
-          const parts = text.split(wakeReg);
-          const command = parts[parts.length - 1]?.trim();
-          
-          if (!(this as any)._lastWakeTime || (Date.now() - (this as any)._lastWakeTime > 3000)) {
-            this.playBeep('start');
-            (this as any)._lastWakeTime = Date.now();
-          }
-          
-          this.onWakeCallback();
-          
-          // Optimization: If the command is clear in interim and is a high-frequency command, process it early
-          if (command && command.length >= 2) {
-             const highFreqRegex = /(开灯|关灯|开窗帘|关窗帘|退房)/;
-             if (highFreqRegex.test(command)) {
-               // Throttle to avoid multiple calls for the same interim result
-               if ((this as any)._lastProcessedInterim !== command) {
-                 (this as any)._lastProcessedInterim = command;
-                 await this.processCommand(command, (this as any)._lastContext);
-               }
-               return;
-             }
-          }
-
-          if (finalTranscript) {
-             await this.processCommand(command, (this as any)._lastContext);
-          }
-          return;
-        }
-
-        if (finalTranscript && finalTranscript.length >= 1) {
-          this.onResultCallback(finalTranscript);
-          await this.processCommand(finalTranscript, (this as any)._lastContext);
-          this._interimText = ""; // Reset
-          (this as any)._lastProcessedInterim = ""; // Reset
-        }
-      };
-
-      this.recognition.onerror = (event: any) => {
-        const fatalErrors = ['not-allowed', 'service-not-allowed', 'audio-capture'];
-        const silentErrors = ['no-speech', 'aborted']; 
-
-        if (event.error === 'no-speech') {
-          this.onErrorCallback("没听清楚，请再说一遍。");
-          return;
-        }
-
-        if (fatalErrors.includes(event.error)) {
-           this.isListening = false;
-           if (event.error === 'not-allowed') {
-             this.onErrorCallback('麦克风权限已关闭，请在浏览器设置中开启');
-           } else {
-             this.onErrorCallback(`语音引擎受限 (${event.error})，请检查设备。`);
-           }
-           return;
-        }
-
-        if (event.error === 'network') {
-          this.onErrorCallback('网络连接异常，语音功能受限');
-          // Allow it to try and restart later
-        } else if (!silentErrors.includes(event.error)) {
-          // Log other errors for debugging but don't always stop
-          console.warn('[VoiceService] Recognition error:', event.error);
-        }
-      };
-
-      this.recognition.onend = () => {
-        // Auto-restart with a small delay to avoid rapid looping
-        // BUT only if we are not currently speaking (Sequential Interaction)
-        if (this.isListening && !this.isSpeaking) {
-          setTimeout(() => {
-            try {
-              if (this.isListening && !this.isSpeaking) this.recognition.start();
-            } catch (e) {
-              // Usually error if already started, safe to ignore
-            }
-          }, 300);
-        }
-      };
-    }
+    // FunasrService handles ASR (initialized as class property above).
+    // Audio will be unlocked on first user interaction via unlockAudio().
   }
 
   private _activeUtterance: SpeechSynthesisUtterance | null = null;
@@ -302,11 +177,11 @@ export class VoiceService {
 
   speak(text: string) {
     if (typeof window === 'undefined' || !text) return;
-    
+
     // 强制取消之前的播报，通过先 resume 再 cancel 解决部分浏览器卡死状态
     window.speechSynthesis.resume();
     window.speechSynthesis.cancel();
-    
+
     if (this._keepAliveTimer) {
       clearInterval(this._keepAliveTimer);
       this._keepAliveTimer = null;
@@ -315,16 +190,16 @@ export class VoiceService {
     // 解决部分浏览器（如 Chrome）中长语音被垃圾回收导致中断的问题
     this._activeUtterance = new SpeechSynthesisUtterance(text);
     const utterance = this._activeUtterance;
-    
-    utterance.lang = 'zh-CN';
-    utterance.rate = 1.05; 
-    utterance.pitch = 1.0; 
 
-    const voices = this._voices.length > 0 ? this._voices : window.speechSynthesis.getVoices();
-    const zhVoice = voices.find(v => v.lang.includes('zh-CN') && v.name.includes('Google')) || 
-                    voices.find(v => v.lang.includes('zh-CN')) || 
+    utterance.lang = 'zh-CN';
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    const zhVoice = voices.find(v => v.lang.includes('zh-CN') && v.name.includes('Google')) ||
+                    voices.find(v => v.lang.includes('zh-CN')) ||
                     voices.find(v => v.lang.includes('zh'));
-    
+
     if (zhVoice) {
       utterance.voice = zhVoice;
     }
@@ -333,8 +208,8 @@ export class VoiceService {
     utterance.onstart = () => {
       this.isSpeaking = true;
       // 停止收音，避免自言自语（反馈语音时需等语音反馈完再继续接收）
-      if (this.recognition) {
-        try { this.recognition.stop(); } catch(e) {}
+      if (this.funasrService.isListening) {
+        this.funasrService.stop();
       }
 
       // 每隔 10 秒调用一次 pause/resume 是解决 Chrome 语音截断的玄学有效方案
@@ -355,12 +230,12 @@ export class VoiceService {
       }
 
       this.onSpeechEndCallback();
-      
+
       // 语音反馈完后再继续接收语音指令
-      if (this.isListening && this.recognition) {
+      if (this.isListening && !this.funasrService.isListening) {
         setTimeout(() => {
           try {
-            if (this.isListening && !this.isSpeaking) this.recognition.start();
+            this.funasrService.start();
           } catch(e) {}
         }, 300);
       }
@@ -375,16 +250,10 @@ export class VoiceService {
     window.speechSynthesis.speak(utterance);
   }
 
-  private _loadVoices() {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      this._voices = window.speechSynthesis.getVoices();
-    }
-  }
-
   // Warm up the speech synthesis (call this on first user interaction)
   unlockAudio() {
     if (typeof window === 'undefined') return;
-    
+
     // Initialize AudioContext for beeps
     if (!this.audioCtx) {
       this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -397,15 +266,15 @@ export class VoiceService {
 
   private playBeep(type: 'start' | 'success' | 'error' | 'think') {
     if (!this.audioCtx) return;
-    
+
     const osc = this.audioCtx.createOscillator();
     const gain = this.audioCtx.createGain();
-    
+
     osc.connect(gain);
     gain.connect(this.audioCtx.destination);
-    
+
     const now = this.audioCtx.currentTime;
-    
+
     switch(type) {
       case 'start':
         osc.frequency.setValueAtTime(660, now);
@@ -463,7 +332,7 @@ export class VoiceService {
     this.lastCommandTime = now;
 
     // 7. 指令冲突 (Simulated: if command contains both contradictory action keywords for the same context)
-    // 排除“玄关”和“开关”中的字干扰
+    // 排除"玄关"和"开关"中的字干扰
     const safeText = cleanText.replace(/玄关/g, '').replace(/开关/g, '');
     if ((safeText.includes('打开') || safeText.includes('开启')) && (safeText.includes('关闭') || safeText.includes('关掉') || safeText.includes('熄灭'))) {
         const response = "指令冲突，请稍后再试。";
@@ -529,7 +398,7 @@ export class VoiceService {
 
     // High-frequency local command matching (Bypasses AI latency & saves quota)
     // 3.2.2.1. 核心设备控制 (本地/即时响应)
-    
+
     // LIGHTS
     const openLightRegex = /(开启|打开|亮|开|把).*(灯|照明|所有灯)/;
     const closeLightRegex = /(关闭|关掉|熄|关|把|关上|关了).*(灯|照明|所有灯)/;
@@ -543,7 +412,7 @@ export class VoiceService {
       else if (cleanText.includes('卧室')) { area = 'bedroom'; response = "好的，卧室灯已为您打开。"; }
       else if (cleanText.includes('卫生间') || cleanText.includes('洗手间') || cleanText.includes('厕所')) { area = 'bathroom'; response = "卫生间灯已打开。"; }
       else if (cleanText.includes('镜前')) { area = 'mirror'; response = "镜前灯已打开。"; }
-      
+
       this.speak(response);
       this.onActionCallback({ type: 'LIGHTS', payload: { state: true, area }, response });
       return;
@@ -571,7 +440,7 @@ export class VoiceService {
       let type = 'main';
       let response = "好的，窗帘已为您拉开。";
       if (cleanText.includes('纱')) { type = 'gauze'; response = "好的，窗纱已为您打开。"; }
-      
+
       this.speak(response);
       this.onActionCallback({ type: 'CURTAINS', payload: { state: true, type }, response });
       return;
@@ -772,7 +641,7 @@ export class VoiceService {
     try {
       // Basic client-side debounce and circuit-breaker for quota
       const now = Date.now();
-      
+
       // Check if we are in a cooldown period after a 429 error
       if ((this as any)._aiCooldownUntil && now < (this as any)._aiCooldownUntil) {
         const remaining = Math.ceil(((this as any)._aiCooldownUntil - now) / 1000);
@@ -790,11 +659,11 @@ export class VoiceService {
       (this as any)._lastAiCall = now;
 
         const contextStr = context ? `Current State: ${JSON.stringify(context)}` : '';
-        
+
         // Mantain simple conversation history
         const userTurn = { role: 'user' as const, parts: [{ text: `${contextStr}\nUser Command: ${cleanText}` }] };
         const history = [...this.conversationHistory, userTurn].slice(-6); // Keep last 3 turns
-        
+
         this.playBeep('think');
 
         const ai = getAI();
@@ -819,9 +688,9 @@ export class VoiceService {
         const textResponse = response.text;
 
         // Update history
-        this.conversationHistory = [...history, { 
-          role: 'model' as const, 
-          parts: [{ text: textResponse || (calls && calls.length > 0 ? `[Function Call: ${calls[0].name}]` : "...") }] 
+        this.conversationHistory = [...history, {
+          role: 'model' as const,
+          parts: [{ text: textResponse || (calls && calls.length > 0 ? `[Function Call: ${calls[0].name}]` : "...") }]
         }].slice(-6);
 
         if (calls && calls.length > 0) {
@@ -878,22 +747,22 @@ export class VoiceService {
           this.onActionCallback({ type: 'QUERY', payload: { text: textResponse }, response: textResponse });
         } else {
           // 5. 意图理解失败
-          const response = "我不太明白您的意思，您可以试试说‘打开窗帘’或‘我要喝水’。";
+          const response = "我不太明白您的意思，您可以试试说'打开窗帘'或'我要喝水'。";
           this.speak(response);
           this.onResultCallback(response);
         }
       }
     } catch (error: any) {
       console.error('Gemini Voice Processing Error:', error);
-      
+
       // 5. 意图理解失败 / 系统忙
-      let errorMsg = "我不太明白您的意思，您可以试试说‘打开窗帘’或‘我要喝水’。";
+      let errorMsg = "我不太明白您的意思，您可以试试说'打开窗帘'或'我要喝水'。";
       const errorStr = typeof error === 'string' ? error : JSON.stringify(error);
-      
+
       // Extensive check for Quota/Rate Limit/429
-      const isQuotaError = 
-        error?.error?.code === 429 || 
-        error?.status === "RESOURCE_EXHAUSTED" || 
+      const isQuotaError =
+        error?.error?.code === 429 ||
+        error?.status === "RESOURCE_EXHAUSTED" ||
         errorStr.includes('429') ||
         errorStr.toLowerCase().includes('quota') ||
         errorStr.toLowerCase().includes('limit');
@@ -910,11 +779,6 @@ export class VoiceService {
   }
 
   start(onResult: (text: string) => void, onAction: (action: VoiceCommandAction) => void, onError: (err: string) => void, onWake: () => void, onSpeechEnd: () => void, context?: any) {
-    if (!this.recognition) {
-      onError('当前浏览器不支持语音识别功能，请触摸控制');
-      return;
-    }
-
     this.onResultCallback = onResult;
     this.onActionCallback = onAction;
     this.onErrorCallback = onError;
@@ -924,18 +788,91 @@ export class VoiceService {
     this._interimText = ""; // 强制重置临时文本缓冲区
 
     this.playBeep('start');
-    
+
     // 唤醒与开启确认：立即进入收音状态并显示
     this.onResultCallback("语音服务已开启");
 
     if (this.isListening) return;
 
+    // 设置 FunasrService 回调
+    this.funasrService.onresult = (text: string, isFinal: boolean) => {
+      if (!text.trim()) return;
+
+      // Interrupt AI if user starts speaking
+      if (isFinal && text.length > 1 && window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        console.log('[VoiceService] Interrupted AI speech because user started talking.');
+      }
+
+      // 临时文本：更新 UI
+      if (!isFinal) {
+        this._interimText = text;
+        this.onResultCallback(text);
+        return;
+      }
+
+      // 最终结果
+      this.onResultCallback(text);
+
+      // 唤醒词检测
+      const wakeWords = ['小枢', '小述', '小书', '小梳', '你好小枢', 'hi 小枢', 'hey 小枢', '消暑', '小舒'];
+      const wakeReg = new RegExp(`(${wakeWords.join('|')})`, 'i');
+      const matchedWakeWord = text.match(wakeReg);
+
+      if (matchedWakeWord) {
+        const parts = text.split(wakeReg);
+        const command = parts[parts.length - 1]?.trim();
+
+        if (!(this as any)._lastWakeTime || (Date.now() - (this as any)._lastWakeTime > 3000)) {
+          this.playBeep('start');
+          (this as any)._lastWakeTime = Date.now();
+        }
+
+        this.onWakeCallback();
+
+        if (command && command.length >= 2) {
+          // High-frequency commands: process immediately
+          const highFreqRegex = /(开灯|关灯|开窗帘|关窗帘|退房)/;
+          if (highFreqRegex.test(command)) {
+            this.processCommand(command, (this as any)._lastContext);
+            return;
+          }
+        }
+
+        this.processCommand(command || text, (this as any)._lastContext);
+        return;
+      }
+
+      // 无唤醒词：直接处理
+      this.processCommand(text, (this as any)._lastContext);
+    };
+
+    this.funasrService.onerror = (err: string) => {
+      console.error('[VoiceService] FunasrService error:', err);
+      this.onErrorCallback(err);
+    };
+
+    this.funasrService.onend = () => {
+      // 自动重启（FunasrService 内部已处理自动重连，这里用于兜底）
+      if (this.isListening && !this.isSpeaking) {
+        setTimeout(() => {
+          try {
+            if (this.isListening && !this.isSpeaking && !this.funasrService.isListening) {
+              this.funasrService.start();
+            }
+          } catch (e) {
+            // ignore
+          }
+        }, 300);
+      }
+    };
+
     try {
-      this.recognition.start();
+      this.funasrService.start();
       this.isListening = true;
     } catch (e) {
-      console.error('Error starting recognition:', e);
-      onError('麦克风权限故障，请触摸控制');
+      console.error('Error starting funasr service:', e);
+      onError('麦克风启动失败');
     }
   }
 
@@ -949,11 +886,10 @@ export class VoiceService {
       console.log('[VoiceService] Manual stop, processing interim text:', this._interimText);
       this.processCommand(this._interimText, (this as any)._lastContext);
     }
-    
+
     this.isListening = false;
-    if (this.recognition) {
-      this.recognition.stop();
-    }
+    this.funasrService.stop();
+
     // 处理完成后/停止后：切换至就绪状态
     this._interimText = "";
     this.onActionCallback({ type: 'WAKE', payload: { action: 'ready' }, response: '继续收音' });
